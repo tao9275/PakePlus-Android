@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>物料多库位出入库系统（批次+统一出入库弹窗）</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/quagga@0.12.1/dist/quagga.min.js"></script>
+<style>
+#scanner { width:100%; height:240px; background:#000; display:none; }
+.tab-active { background-color:#3b82f6;color:white; }
+.modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);justify-content:center;align-items:center;z-index:999;}
+.modal-content{background:#fff;padding:16px;border-radius:10px;width:90%;max-width:400px;}
+</style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4">
+<div class="max-w-md mx-auto bg-white rounded-xl shadow p-5">
+  <h2 class="text-xl font-bold text-center mb-4">物料多库位出入库系统</h2>
+
+  <!-- Tab切换 -->
+  <div class="flex gap-2 mb-4">
+    <button id="tabQuery" onclick="switchTab('query')" class="flex-1 py-2 rounded-lg tab-active">查询&出入库</button>
+    <button id="tabEdit" onclick="switchTab('edit')" class="flex-1 py-2 rounded-lg bg-gray-200">物料维护</button>
+    <button id="tabLog" onclick="switchTab('log')" class="flex-1 py-2 rounded-lg bg-gray-200">操作日志</button>
+  </div>
+
+  <!-- ================= 查询&出入库面板 ================= -->
+  <div id="panelQuery">
+    <div class="mb-3">
+      <label class="block text-gray-700 mb-1">物料编号 A</label>
+      <div class="flex gap-2">
+        <input id="inputA" type="text" placeholder="输入/扫码物料编号"
+          class="flex-1 border rounded-lg px-3 py-2 focus:outline-blue-400">
+        <button onclick="startScan()" class="bg-green-500 text-white px-3 py-2 rounded-lg">扫码</button>
+      </div>
+    </div>
+    <div id="scanner" class="rounded-lg mb-3"></div>
+    <button onclick="searchMaterial()" class="w-full bg-blue-500 text-white py-2 rounded-lg mb-4">查询物料</button>
+
+    <!-- 查询结果 -->
+    <div id="resultBox" class="hidden border rounded-lg p-3 mb-4 bg-gray-50 text-sm">
+      <p class="font-semibold mb-2">物料A：<span id="showA"></span></p>
+      <p class="font-bold text-blue-600 mb-3">✅ 该物料总库存：<span id="totalQty">0</span></p>
+      <div id="resultList"></div>
+    </div>
+
+    <!-- 查询历史 -->
+    <div class="mt-4">
+      <h3 class="font-semibold mb-2">查询历史</h3>
+      <div id="historyList" class="text-xs max-h-32 overflow-y-auto bg-gray-50 p-2 rounded"></div>
+      <button onclick="clearHistory()" class="mt-2 text-red-500 text-sm">清空历史</button>
+    </div>
+  </div>
+
+  <!-- ================= 物料维护面板：新增批次号 ================= -->
+  <div id="panelEdit" class="hidden">
+    <div class="mb-3">
+      <label class="block text-gray-700 mb-1">物料编号 A</label>
+      <input id="editA" type="text" placeholder="输入物料料号" class="w-full border rounded-lg px-3 py-2">
+    </div>
+    <div class="mb-3">
+      <label class="block text-gray-700 mb-1">库位 B</label>
+      <input id="editB" type="text" placeholder="例如 A-01-01" class="w-full border rounded-lg px-3 py-2">
+    </div>
+    <div class="mb-3">
+      <label class="block text-gray-700 mb-1">批次号</label>
+      <input id="editBatch" type="text" placeholder="批次号（可选）" class="w-full border rounded-lg px-3 py-2">
+    </div>
+    <div class="mb-3">
+      <label class="block text-gray-700 mb-1">库存数量</label>
+      <input id="editQty" type="number" min="0" placeholder="填写库存数量" class="w-full border rounded-lg px-3 py-2">
+    </div>
+    <button onclick="saveMaterialItem()" class="w-full bg-green-500 text-white py-2 rounded-lg mb-4">保存物料记录</button>
+
+    <!-- CSV导入导出 -->
+    <div class="border rounded p-3 mb-4 bg-gray-50">
+      <h3 class="font-semibold mb-2">基码数据 CSV导入/导出</h3>
+      <input type="file" id="csvFileInput" accept=".csv" class="w-full text-sm mb-2">
+      <div class="flex gap-2 mb-2">
+        <button onclick="importCSV('append')" class="flex-1 bg-sky-500 text-white py-2 rounded">导入(追加)</button>
+        <button onclick="importCSV('overwrite')" class="flex-1 bg-orange-500 text-white py-2 rounded">导入(覆盖全部)</button>
+      </div>
+      <button onclick="exportCSV()" class="w-full bg-emerald-500 text-white py-2 rounded">导出全部物料CSV</button>
+      <p class="text-xs mt-2 text-gray-500">CSV列：物料编号A,库位B,批次号,库存数量<br>同料号+库位+批次视为一条记录</p>
+    </div>
+
+    <h3 class="font-semibold mb-2">全部物料清单</h3>
+    <div id="materialList" class="text-xs max-h-40 overflow-y-auto bg-gray-50 p-2 rounded mb-2"></div>
+    <button onclick="clearAllMaterial()" class="w-full bg-red-400 text-white py-2 rounded-lg">清空全部物料</button>
+  </div>
+
+  <!-- ================= 操作日志面板 ================= -->
+  <div id="panelLog" class="hidden">
+    <div class="flex gap-2 mb-3">
+      <button onclick="exportLogCSV()" class="flex-1 bg-emerald-500 text-white py-2 rounded-lg">导出日志CSV</button>
+      <button onclick="clearAllLog()" class="flex-1 bg-red-500 text-white py-2 rounded-lg">清空全部日志</button>
+    </div>
+    <h3 class="font-semibold mb-2">出入库操作日志</h3>
+    <div id="logList" class="text-xs max-h-96 overflow-y-auto bg-gray-50 p-2 rounded"></div>
+  </div>
+</div>
+
+<!-- ========== 出入库单弹窗 ========== -->
+<div id="billModal" class="modal">
+  <div class="modal-content">
+    <h3 class="text-lg font-bold mb-3 text-center">📄 出入库单</h3>
+    <div id="billText" class="bg-gray-50 p-3 rounded whitespace-pre-wrap text-sm mb-4"></div>
+    <div class="flex gap-2">
+      <button onclick="copyBill()" class="flex-1 bg-blue-500 text-white py-2 rounded">复制单据</button>
+      <button onclick="closeBillModal()" class="flex-1 bg-gray-400 text-white py-2 rounded">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 出库弹窗（移除操作人输入框） ========== -->
+<div id="outModal" class="modal">
+  <div class="modal-content">
+    <h3 class="text-lg font-bold mb-3 text-center">📤 出库</h3>
+    <div class="mb-2 text-sm">当前库存：<span id="outStockNum"></span></div>
+    <div class="mb-3">
+      <label class="block text-sm mb-1">出库数量</label>
+      <input id="outQtyInput" type="number" min="1" class="w-full border rounded px-3 py-2">
+    </div>
+    <div class="flex gap-2">
+      <button onclick="confirmOut()" class="flex-1 bg-orange-500 text-white py-2 rounded">确认出库</button>
+      <button onclick="closeOutModal()" class="flex-1 bg-gray-400 text-white py-2 rounded">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== 入库弹窗（移除操作人输入框） ========== -->
+<div id="inModal" class="modal">
+  <div class="modal-content">
+    <h3 class="text-lg font-bold mb-3 text-center">📥 入库</h3>
+    <div class="mb-2 text-sm">当前库存：<span id="inStockNum"></span></div>
+    <div class="mb-3">
+      <label class="block text-sm mb-1">入库数量</label>
+      <input id="inQtyInput" type="number" min="1" class="w-full border rounded px-3 py-2">
+    </div>
+    <div class="flex gap-2">
+      <button onclick="confirmIn()" class="flex-1 bg-green-500 text-white py-2 rounded">确认入库</button>
+      <button onclick="closeInModal()" class="flex-1 bg-gray-400 text-white py-2 rounded">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentBillData = null;
+let currentOutIndex = null;
+let currentInIndex = null;
+const DEFAULT_USER = "系统操作员"; // 固定操作人名称，可直接修改
+
+function openBillModal(bill){
+  currentBillData = bill;
+  document.getElementById('billText').innerText = bill.content;
+  document.getElementById('billModal').style.display = "flex";
+}
+function closeBillModal(){
+  document.getElementById('billModal').style.display = "none";
+}
+function copyBill(){
+  if(!currentBillData) return;
+  navigator.clipboard.writeText(currentBillData.content).then(()=>{
+    alert("单据已复制！");
+  }).catch(()=>{
+    alert("复制失败");
+  })
+}
+
+// 出库弹窗
+function openOutModal(idx){
+  let db = getMaterialDB();
+  const rec = db[idx];
+  currentOutIndex = idx;
+  document.getElementById('outStockNum').innerText = rec.qty;
+  document.getElementById('outQtyInput').value = "";
+  document.getElementById('outModal').style.display = "flex";
+}
+function closeOutModal(){
+  document.getElementById('outModal').style.display = "none";
+  currentOutIndex = null;
+}
+function confirmOut(){
+  const idx = currentOutIndex;
+  if(idx === null) return;
+  const outQty = Number(document.getElementById('outQtyInput').value);
+  const user = DEFAULT_USER;
+  if(isNaN(outQty) || outQty <= 0){
+    alert("请输入有效的出库数量");
+    return;
+  }
+  let db = getMaterialDB();
+  const rec = db[idx];
+  if(rec.qty < outQty){
+    alert("库存不足！");
+    return;
+  }
+  rec.qty -= outQty;
+  saveMaterialDB(db);
+  const logItem = addLog(user, rec.a, rec.b, rec.batch, "out", outQty, rec.qty);
+  closeOutModal();
+  const billContent = `==========出入库单==========
+操作时间：${logItem.time}
+操作人：${logItem.user}
+物料编号：${logItem.materialA}
+库位：${logItem.locationB}
+批次号：${logItem.batch||"-"}
+操作类型：出库
+变动数量：${logItem.changeQty}
+操作后库存：${logItem.afterQty}`;
+  openBillModal({content:billContent});
+  searchMaterial();
+}
+
+// 入库弹窗
+function openInModal(idx){
+  let db = getMaterialDB();
+  const rec = db[idx];
+  currentInIndex = idx;
+  document.getElementById('inStockNum').innerText = rec.qty;
+  document.getElementById('inQtyInput').value = "";
+  document.getElementById('inModal').style.display = "flex";
+}
+function closeInModal(){
+  document.getElementById('inModal').style.display = "none";
+  currentInIndex = null;
+}
+function confirmIn(){
+  const idx = currentInIndex;
+  if(idx === null) return;
+  const inQty = Number(document.getElementById('inQtyInput').value);
+  const user = DEFAULT_USER;
+  if(isNaN(inQty) || inQty <= 0){
+    alert("请输入有效的入库数量");
+    return;
+  }
+  let db = getMaterialDB();
+  const rec = db[idx];
+  rec.qty += inQty;
+  saveMaterialDB(db);
+  const logItem = addLog(user, rec.a, rec.b, rec.batch, "in", inQty, rec.qty);
+  //确认入库后，关闭入库弹窗
+  closeInModal();
+  const billContent = `==========出入库单==========
+操作时间：${logItem.time}
+操作人：${logItem.user}
+物料编号：${logItem.materialA}
+库位：${logItem.locationB}
+批次号：${logItem.batch||"-"}
+操作类型：入库
+变动数量：${logItem.changeQty}
+操作后库存：${logItem.afterQty}`;
+  openBillModal({content:billContent});
+  searchMaterial();
+}
+
+// Tab切换
+function switchTab(tabName){
+  const panelQuery = document.getElementById('panelQuery');
+  const panelEdit = document.getElementById('panelEdit');
+  const panelLog = document.getElementById('panelLog');
+  const tabQueryBtn = document.getElementById('tabQuery');
+  const tabEditBtn = document.getElementById('tabEdit');
+  const tabLogBtn = document.getElementById('tabLog');
+
+  panelQuery.classList.add('hidden');
+  panelEdit.classList.add('hidden');
+  panelLog.classList.add('hidden');
+  tabQueryBtn.classList.remove('tab-active');
+  tabEditBtn.classList.remove('tab-active');
+  tabLogBtn.classList.remove('tab-active');
+  tabQueryBtn.classList.add('bg-gray-200');
+  tabEditBtn.classList.add('bg-gray-200');
+  tabLogBtn.classList.add('bg-gray-200');
+
+  if(tabName === 'query'){
+    panelQuery.classList.remove('hidden');
+    tabQueryBtn.classList.add('tab-active');
+    tabQueryBtn.classList.remove('bg-gray-200');
+  }else if(tabName === 'edit'){
+    panelEdit.classList.remove('hidden');
+    tabEditBtn.classList.add('tab-active');
+    tabEditBtn.classList.remove('bg-gray-200');
+    renderMaterialList();
+  }else if(tabName === 'log'){
+    panelLog.classList.remove('hidden');
+    tabLogBtn.classList.add('tab-active');
+    tabLogBtn.classList.remove('bg-gray-200');
+    renderLogList();
+  }
+}
+
+// 物料库存本地存储（增加batch批次字段）
+function getMaterialDB(){
+  let db = localStorage.getItem("materialDB");
+  if(!db){
+    const initData = [
+      {a:"IC-001", b:"A-01-01", batch:"B20260901", qty:120},
+      {a:"IC-001", b:"A-02-02", batch:"B20260902", qty:60},
+      {a:"IC-002", b:"A-01-02", batch:"B20260901", qty:85},
+      {a:"PCB-101", b:"B-02-03", batch:"B20260825", qty:32},
+      {a:"TER-201", b:"C-03-05", batch:"B20260903", qty:200}
+    ];
+    localStorage.setItem("materialDB", JSON.stringify(initData));
+    return initData;
+  }
+  return JSON.parse(db);
+}
+function saveMaterialDB(db){
+  localStorage.setItem("materialDB", JSON.stringify(db));
+}
+
+// 操作日志存储
+function getLogDB(){
+  let log = localStorage.getItem("stockLog");
+  if(!log) return [];
+  return JSON.parse(log);
+}
+function saveLogDB(logArr){
+  localStorage.setItem("stockLog", JSON.stringify(logArr));
+}
+function addLog(user, a, b, batch, type, changeQty, afterQty){
+  const now = new Date();
+  const timeStr = now.toLocaleString('zh-CN');
+  const logItem = {
+    time: timeStr,
+    user: user,
+    materialA: a,
+    locationB: b,
+    batch: batch,
+    opType: type,
+    changeQty: changeQty,
+    afterQty: afterQty
+  };
+  let logs = getLogDB();
+  logs.unshift(logItem);
+  saveLogDB(logs);
+  return logItem;
+}
+function renderLogList(){
+  const logs = getLogDB();
+  const dom = document.getElementById('logList');
+  if(logs.length ===0){
+    dom.innerHTML = '<div class="text-gray-400 text-center py-2">暂无出入库日志</div>';
+    return;
+  }
+  let html = "";
+  logs.forEach(l=>{
+    html += `
+    <div class="py-2 border-b">
+      <div>${l.time}</div>
+      <div>操作人：${l.user} | ${l.materialA}【${l.locationB}】批次：${l.batch||"-"}</div>
+      <div>${l.opType==="in"?"入库":"出库"} ${l.changeQty}，操作后库存：${l.afterQty}</div>
+      <button onclick="genBillFromLog(${logs.indexOf(l)})" class="mt-1 bg-sky-400 text-white px-2 py-1 rounded text-xs">生成单据</button>
+    </div>`;
+  });
+  dom.innerHTML = html;
+}
+function genBillFromLog(idx){
+  const l = getLogDB()[idx];
+  const billContent = `==========出入库单==========
+操作时间：${l.time}
+操作人：${l.user}
+物料编号：${l.materialA}
+库位：${l.locationB}
+批次号：${l.batch||"-"}
+操作类型：${l.opType==="in"?"入库":"出库"}
+变动数量：${l.changeQty}
+操作后库存：${l.afterQty}`;
+  openBillModal({content:billContent});
+}
+function exportLogCSV(){
+  const logs = getLogDB();
+  let csv = "操作时间,操作人,物料编号A,库位B,批次号,操作类型,变动数量,操作后库存\n";
+  logs.forEach(l=>{
+    const opText = l.opType==="in"?"入库":"出库";
+    csv += `"${l.time}","${l.user}","${l.materialA}","${l.locationB}","${l.batch||""}","${opText}",${l.changeQty},${l.afterQty}\n`;
+  });
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = "出入库操作日志.csv"; a.click();
+  URL.revokeObjectURL(url);
+}
+function clearAllLog(){
+  if(!confirm("确定清空全部出入库日志？此操作不可恢复！")) return;
+  saveLogDB([]);
+  renderLogList();
+}
+
+// 保存物料，主键：料号+库位+批次
+function saveMaterialItem(){
+  const a = document.getElementById('editA').value.trim();
+  const b = document.getElementById('editB').value.trim();
+  const batch = document.getElementById('editBatch').value.trim();
+  const qty = Number(document.getElementById('editQty').value.trim());
+  if(!a || !b){ alert("料号、库位不能为空"); return; }
+  if(isNaN(qty) || qty <0){ alert("库存数量必须≥0"); return; }
+  let db = getMaterialDB();
+  const existIndex = db.findIndex(x=>
+    x.a.toLowerCase() === a.toLowerCase() &&
+    x.b.toLowerCase() === b.toLowerCase() &&
+    x.batch === batch
+  );
+  if(existIndex >=0){
+    db[existIndex] = {a,b,batch,qty};
+  }else{
+    db.push({a,b,batch,qty});
+  }
+  saveMaterialDB(db);
+  alert("保存成功");
+  document.getElementById('editA').value = "";
+  document.getElementById('editB').value = "";
+  document.getElementById('editBatch').value = "";
+  document.getElementById('editQty').value = "";
+  renderMaterialList();
+}
+
+function renderMaterialList(){
+  const db = getMaterialDB();
+  const dom = document.getElementById('materialList');
+  if(db.length === 0){
+    dom.innerHTML = '<div class="text-gray-400 text-center py-2">暂无物料数据</div>';
+    return;
+  }
+  dom.innerHTML = db.map((item, idx)=>`
+    <div class="flex justify-between py-1 border-b">
+      <span>${item.a} | 库位:${item.b} |批次:${item.batch||"-"} | 库存:${item.qty}</span>
+      <button onclick="deleteMaterial(${idx})" class="text-red-500">删除</button>
+    </div>`).join("");
+}
+function deleteMaterial(index){
+  let db = getMaterialDB();
+  db.splice(index,1);
+  saveMaterialDB(db);
+  renderMaterialList();
+}
+function clearAllMaterial(){
+  if(!confirm("确定清空全部物料数据？")) return;
+  localStorage.removeItem("materialDB");
+  renderMaterialList();
+}
+
+// 查询物料
+function searchMaterial(){
+  const A = document.getElementById('inputA').value.trim();
+  if(!A){ alert("请输入或扫码物料编号"); return; }
+  const db = getMaterialDB();
+  const list = db.filter(x=>x.a.toLowerCase() === A.toLowerCase());
+  const resultBox = document.getElementById('resultBox');
+  const resultListDom = document.getElementById('resultList');
+  document.getElementById('showA').innerText = A;
+  resultBox.classList.remove('hidden');
+
+  const totalQty = list.reduce((sum,item)=> sum + Number(item.qty), 0);
+  document.getElementById('totalQty').innerText = totalQty;
+
+  if(list.length ===0){
+    resultListDom.innerHTML = `<p class="text-red-500">未匹配到该物料</p>`;
+  }else{
+    let html = "";
+    list.forEach((item,localIdx)=>{
+      const realIdx = db.findIndex(r=>r.a===item.a && r.b===item.b && r.batch===item.batch);
+      html += `
+      <div class="border p-2 my-2 rounded">
+        <div>库位：${item.b}</div>
+        <div>批次号：${item.batch||"-"}</div>
+        <div>当前库存：<b>${item.qty}</b></div>
+        <div class="flex gap-2 mt-2">
+          <button onclick="openInModal(${realIdx})" class="bg-green-500 text-white px-2 py-1 rounded text-xs">入库</button>
+          <button onclick="openOutModal(${realIdx})" class="bg-orange-500 text-white px-2 py-1 rounded text-xs">出库</button>
+          <button onclick="genBillFromMaterial('${item.a}','${item.b}','${item.batch||""}',${item.qty})" class="bg-sky-500 text-white px-2 py-1 rounded text-xs">生成单据</button>
+        </div>
+      </div>`;
+    });
+    resultListDom.innerHTML = html;
+    saveHistory({a:A, data:list, totalQty:totalQty});
+  }
+  renderHistory();
+}
+function genBillFromMaterial(a,b,batch,qty){
+  const now = new Date().toLocaleString('zh-CN');
+  const billContent = `==========物料单据==========
+单据时间：${now}
+物料编号：${a}
+库位：${b}
+批次号：${batch||"-"}
+当前库存：${qty}`;
+  openBillModal({content:billContent});
+}
+
+// CSV导出，增加批次列
+function exportCSV(){
+  const db = getMaterialDB();
+  let csv = "物料编号A,库位B,批次号,库存数量\n";
+  db.forEach(item=>{ csv += `"${item.a}","${item.b}","${item.batch||""}",${item.qty}\n`; });
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = "多库位物料库存.csv"; a.click();
+  URL.revokeObjectURL(url);
+}
+function importCSV(mode){
+  const fileInput = document.getElementById('csvFileInput');
+  const file = fileInput.files[0];
+  if(!file){ alert("请先选择CSV文件"); return; }
+  const reader = new FileReader();
+  reader.onload = function(e){
+    const text = e.target.result;
+    const lines = text.split(/\r?\n/).filter(line=>line.trim()!=="");
+    if(lines.length <=1){ alert("CSV文件为空"); return; }
+    let newData = [];
+    for(let i=1;i<lines.length;i++){
+      const row = lines[i].split(',');
+      const a = (row[0]||"").trim().replace(/"/g,'');
+      const b = (row[1]||"").trim().replace(/"/g,'');
+      const batch = (row[2]||"").trim().replace(/"/g,'');
+      const qty = Number((row[3]||"0").trim().replace(/"/g,''));
+      if(a && b && !isNaN(qty) && qty>=0){
+        newData.push({a,b,batch,qty});
+      }
+    }
+    if(newData.length===0){ alert("没有读到有效物料数据，请检查CSV"); return; }
+    let finalDB;
+    if(mode === 'overwrite'){
+      finalDB = newData;
+    }else{
+      finalDB = getMaterialDB();
+      newData.forEach(item=>{
+        const idx = finalDB.findIndex(x=>
+          x.a.toLowerCase()===item.a.toLowerCase() &&
+          x.b.toLowerCase()===item.b.toLowerCase() &&
+          x.batch === item.batch
+        );
+        if(idx>=0) finalDB[idx]=item;
+        else finalDB.push(item);
+      })
+    }
+    saveMaterialDB(finalDB);
+    alert(`导入成功，共读取 ${newData.length} 条记录`);
+    renderMaterialList();
+    fileInput.value = "";
+  }
+  reader.readAsText(file);
+}
+
+// 扫码
+function startScan(){
+  const scannerDom = document.getElementById('scanner');
+  scannerDom.style.display = "block";
+  Quagga.init({
+    inputStream:{name:"Live", type:"LiveStream", target: scannerDom},
+    decoder:{readers:["code_128_reader","ean_reader","code_39_reader"]}
+  }, err=>{
+    if(err){ alert("扫码初始化失败"); return; }
+    Quagga.start();
+    Quagga.onDetected(res=>{
+      const code = res.codeResult.code;
+      document.getElementById('inputA').value = code;
+      Quagga.stop();
+      scannerDom.style.display = "none";
+    });
+  });
+}
+
+// 查询历史
+function saveHistory(record){
+  let list = JSON.parse(localStorage.getItem("stockHistory")||"[]");
+  list.unshift(record);
+  if(list.length>20) list = list.slice(0,20);
+  localStorage.setItem("stockHistory",JSON.stringify(list));
+}
+function renderHistory(){
+  const list = JSON.parse(localStorage.getItem("stockHistory")||"[]");
+  const dom = document.getElementById('historyList');
+  if(list.length===0){
+    dom.innerHTML = '<div class="text-gray-400 text-center py-2">暂无查询历史</div>';
+    return;
+  }
+  let html = "";
+  list.forEach(h=>{
+    const detail = h.data.map(d=>`${d.b}[${d.batch||"-"}]:${d.qty}`).join("；");
+    html += `<div>A:${h.a}【总库存:${h.totalQty}】 → ${detail}</div>`;
+  })
+  dom.innerHTML = html;
+}
+function clearHistory(){
+  localStorage.removeItem("stockHistory");
+  renderHistory();
+}
+
+// 初始化
+renderHistory();
+getMaterialDB();
+</script>
+</body>
+</html>
